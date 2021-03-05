@@ -7,6 +7,8 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.elasticsearch.action.bulk.BulkRequest;
+import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.client.RequestOptions;
@@ -68,7 +70,7 @@ public class ElasticSearchConsumer implements Runnable {
         properties.setProperty(GROUP_ID_CONFIG, groupId);
         properties.setProperty(AUTO_OFFSET_RESET_CONFIG, resetOffset);
         properties.setProperty(ENABLE_AUTO_COMMIT_CONFIG, "false");
-        properties.setProperty(MAX_POLL_RECORDS_CONFIG, "10");
+        properties.setProperty(MAX_POLL_RECORDS_CONFIG, "100");
 
         //create consumer
         KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
@@ -84,6 +86,9 @@ public class ElasticSearchConsumer implements Runnable {
             while (!isDone) {
                 ConsumerRecords<String, String> records = consumer.poll(ofMillis(100));
                 log.info("Received " + records.count());
+
+                BulkRequest bulkRequest = new BulkRequest();
+
                 for (ConsumerRecord<String, String> record : records) {
 
                     //for idempotent
@@ -103,12 +108,14 @@ public class ElasticSearchConsumer implements Runnable {
                             .id(id)
                             .source(json.toString(), XContentType.JSON);
 
-                    IndexResponse index = client.index(indexRequest, RequestOptions.DEFAULT);
-                    log.info(index.getId());
+                    bulkRequest.add(indexRequest);
                 }
-                log.info("1");
-                consumer.commitSync();
-                log.info("Offsets have been committed");
+                if (records.count() > 0) {
+                    BulkResponse bulkItemResponses = client.bulk(bulkRequest, RequestOptions.DEFAULT);
+                    consumer.commitSync();
+                    log.info("Offsets have been committed");
+                }
+
             }
         } catch (WakeupException e) {
             log.info("Received shutdown signal!");
