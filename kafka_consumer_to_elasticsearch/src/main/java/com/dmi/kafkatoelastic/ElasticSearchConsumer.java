@@ -30,7 +30,7 @@ public class ElasticSearchConsumer implements Runnable {
 
     private final KafkaConsumer<String, String> consumer;
     private final CountDownLatch countDownLatch;
-    private volatile  boolean isDone = false;
+    private volatile boolean isDone = false;
 
     public ElasticSearchConsumer(String topicName, CountDownLatch countDownLatch) {
         this.consumer = createConsumer(topicName);
@@ -57,7 +57,7 @@ public class ElasticSearchConsumer implements Runnable {
         StringJoiner bootstrapServers = new StringJoiner(",");
         bootstrapServers.add("127.0.0.1:9092");
         String kafkaStringDeserializer = StringDeserializer.class.getName();
-        String groupId = "kafka-demo-elasticsearch3";
+        String groupId = "kafka-demo-elasticsearch5";
         String resetOffset = "earliest";
 
         // create consumer configs
@@ -67,6 +67,8 @@ public class ElasticSearchConsumer implements Runnable {
         properties.setProperty(VALUE_DESERIALIZER_CLASS_CONFIG, kafkaStringDeserializer);
         properties.setProperty(GROUP_ID_CONFIG, groupId);
         properties.setProperty(AUTO_OFFSET_RESET_CONFIG, resetOffset);
+        properties.setProperty(ENABLE_AUTO_COMMIT_CONFIG, "false");
+        properties.setProperty(MAX_POLL_RECORDS_CONFIG, "10");
 
         //create consumer
         KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
@@ -81,20 +83,32 @@ public class ElasticSearchConsumer implements Runnable {
             JSONObject json = new JSONObject();
             while (!isDone) {
                 ConsumerRecords<String, String> records = consumer.poll(ofMillis(100));
+                log.info("Received " + records.count());
                 for (ConsumerRecord<String, String> record : records) {
-                    log.info("Key: {}, value: {}", record.key(), record.value());
+
+                    //for idempotent
+                    //kafka generic ID
+                    //String id = record.topic() + "_" + record.partition() + " " + record.offset();
+
+                    //application id
+                    String value = record.value();
+                    String id = getId(value);
+
+                    log.info("Key: {}, value: {}", record.key(), value);
                     log.info("Partition: {}, offset: {}", record.partition(), record.offset());
 
-                    json.put("uuid", record.value());
+                    json.put("uuid", value);
 
                     IndexRequest indexRequest = new IndexRequest("twitter")
+                            .id(id)
                             .source(json.toString(), XContentType.JSON);
 
                     IndexResponse index = client.index(indexRequest, RequestOptions.DEFAULT);
-                    String id = index.getId();
-                    log.info(id);
+                    log.info(index.getId());
                 }
                 log.info("1");
+                consumer.commitSync();
+                log.info("Offsets have been committed");
             }
         } catch (WakeupException e) {
             log.info("Received shutdown signal!");
@@ -106,6 +120,13 @@ public class ElasticSearchConsumer implements Runnable {
             countDownLatch.countDown();
             log.info("Consumer has closed!");
         }
+    }
+
+    private String getId(String value) {
+        if (value == null) {
+            return "0";
+        }
+        return value.replaceFirst("Message - ", "");
     }
 
     public void shutdown() {
